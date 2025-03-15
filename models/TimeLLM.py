@@ -8,6 +8,7 @@ from transformers import LlamaConfig, LlamaModel, LlamaTokenizer, GPT2Config, GP
 from layers.Embed import PatchEmbedding
 import transformers
 from layers.StandardNorm import Normalize
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 transformers.logging.set_verbosity_error()
 
@@ -191,13 +192,15 @@ class Model(nn.Module):
 
         self.normalize_layers = Normalize(configs.enc_in, affine=False)
 
-    def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
+        self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=configs.chunk_size, chunk_overlap=configs.overlap)
+
+    def forward(self, article_batch, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
         if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
-            dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
+            dec_out = self.forecast(article_batch, x_enc, x_mark_enc, x_dec, x_mark_dec)
             return dec_out[:, -self.pred_len:, :]
         return None
 
-    def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
+    def forecast(self, article_batch, x_enc, x_mark_enc, x_dec, x_mark_dec):
 
         x_enc = self.normalize_layers(x_enc, 'norm')
 
@@ -210,24 +213,23 @@ class Model(nn.Module):
         lags = self.calcute_lags(x_enc)
         trends = x_enc.diff(dim=1).sum(dim=1)
 
-        prompt = []
-        for b in range(x_enc.shape[0]):
-            min_values_str = str(min_values[b].tolist()[0])
-            max_values_str = str(max_values[b].tolist()[0])
-            median_values_str = str(medians[b].tolist()[0])
-            lags_values_str = str(lags[b].tolist())
-            prompt_ = (
-                f"<|start_prompt|>Dataset description: {self.description}"
-                f"Task description: forecast the next {str(self.pred_len)} steps given the previous {str(self.seq_len)} steps information; "
-                "Input statistics: "
-                f"min value {min_values_str}, "
-                f"max value {max_values_str}, "
-                f"median value {median_values_str}, "
-                f"the trend of input is {'upward' if trends[b] > 0 else 'downward'}, "
-                f"top 5 lags are : {lags_values_str}<|<end_prompt>|>"
-            )
+        article_embeddings = []
+        for idx in range(len(article_batch['title'])):
+            prompt = configs.seperator.join(['Title: ' + article_batch['title'][idx],
+                                             'Description: ' + article_batch['description'][idx],
+                                             'Content: ' + article_batch['content'][idx]])
+            chunks = self.text_splitter.split_text(prompt)
+            encoded_input = self.tokenizer(chunks, return_tensors='pt', truncation=True, padding=True, max_length=configs.max_length)
+            encoded_input = {key: value for key, value in encoded_input.items()}    # If error, fix 'key: value.to(device) ...'
 
-            prompt.append(prompt_)
+            with torch.no_grad():
+                model_output = llm_model(**encoded_input)
+
+            embedding = self.mean_pooling(model_output = model_output, attention_mask=encoded_input['attention_mask'])
+            embedding = self.adjust_article_embedding_shape(embedding) # (max_paragraphs, embed_dim)
+
+            article_embeddings.append(embedding)
+        article_embeddings = torch.stack(article_embeddings, dim=0)    # (batch_size, max_paragraphs, embedding_dim)
 
         x_enc = x_enc.reshape(B, N, T).permute(0, 2, 1).contiguous()
 
