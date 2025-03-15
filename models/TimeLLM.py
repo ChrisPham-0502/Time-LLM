@@ -233,16 +233,12 @@ class Model(nn.Module):
 
         x_enc = x_enc.reshape(B, N, T).permute(0, 2, 1).contiguous()
 
-        prompt = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids
-        prompt_embeddings = self.llm_model.get_input_embeddings()(prompt.to(x_enc.device))  # (batch, prompt_token, dim)
-
         source_embeddings = self.mapping_layer(self.word_embeddings.permute(1, 0)).permute(1, 0)
 
         x_enc = x_enc.permute(0, 2, 1).contiguous()
-        #enc_out, n_vars = self.patch_embedding(x_enc.to(torch.bfloat16))
         enc_out, n_vars = self.patch_embedding(x_enc.to(torch.float32))
         enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings)
-        llama_enc_out = torch.cat([prompt_embeddings, enc_out], dim=1)
+        llama_enc_out = torch.cat([article_embeddings, enc_out], dim=1)
         dec_out = self.llm_model(inputs_embeds=llama_enc_out).last_hidden_state
         dec_out = dec_out[:, :, :self.d_ff]
 
@@ -266,6 +262,26 @@ class Model(nn.Module):
         _, lags = torch.topk(mean_value, self.top_k, dim=-1)
         return lags
 
+    def mean_pooling(self, model_output, attention_mask):
+        token_embeddings = model_output[0]
+        input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+        return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+
+    def adjust_article_embedding_shape(self, article_embedding: torch.Tensor):
+        target_size = configs.max_paragraphs
+        tensor = article_embeddings
+
+        n, d = tensor.shape
+
+        if n < target_size:
+            # padding
+            padding_size = target_size - n
+            padding = torch.zeros(padding_size, d).to(tensor.device)
+            adjusted_tensor = torch.cat([tensor, padding], dim=0)
+        else:
+            # truncation
+            adjusted_tensor = tensor[:target_size, :]
+        return adjusted_tensor
 
 class ReprogrammingLayer(nn.Module):
     def __init__(self, d_model, n_heads, d_keys=None, d_llm=None, attention_dropout=0.1):
