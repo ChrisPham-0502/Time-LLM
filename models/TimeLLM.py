@@ -32,6 +32,7 @@ class Model(nn.Module):
 
     def __init__(self, configs, patch_len=16, stride=8):
         super(Model, self).__init__()
+        self.configs = configs
         self.task_name = configs.task_name
         self.pred_len = configs.pred_len
         self.seq_len = configs.seq_len
@@ -190,7 +191,7 @@ class Model(nn.Module):
         else:
             raise NotImplementedError
 
-        self.normalize_layers = Normalize(configs.enc_in, affine=False)
+        self.normalize_layers = Normalize(self.configs.enc_in, affine=False)
 
         self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=configs.chunk_size, chunk_overlap=configs.overlap)
 
@@ -209,11 +210,11 @@ class Model(nn.Module):
 
         article_embeddings = []
         for idx in range(len(article_batch['title'])):
-            prompt = configs.seperator.join(['Title: ' + article_batch['title'][idx],
+            prompt = self.configs.seperator.join(['Title: ' + article_batch['title'][idx],
                                              'Description: ' + article_batch['description'][idx],
                                              'Content: ' + article_batch['content'][idx]])
             chunks = self.text_splitter.split_text(prompt)
-            encoded_input = self.tokenizer(chunks, return_tensors='pt', truncation=True, padding=True, max_length=configs.max_length)
+            encoded_input = self.tokenizer(chunks, return_tensors='pt', truncation=True, padding=True, max_length=self.configs.max_length)
             encoded_input = {key: value for key, value in encoded_input.items()}    # If error, fix 'key: value.to(device) ...'
 
             with torch.no_grad():
@@ -262,7 +263,7 @@ class Model(nn.Module):
         return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
     def adjust_article_embedding_shape(self, article_embedding: torch.Tensor):
-        target_size = configs.max_paragraphs
+        target_size = self.configs.max_paragraphs
         tensor = article_embeddings
 
         n, d = tensor.shape
