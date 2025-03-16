@@ -264,7 +264,7 @@ class Model(nn.Module):
 
     def adjust_article_embedding_shape(self, article_embedding: torch.Tensor):
         target_size = self.configs.max_paragraphs
-        tensor = article_embeddings
+        tensor = article_embedding
 
         n, d = tensor.shape
 
