@@ -218,7 +218,7 @@ class Model(nn.Module):
             encoded_input = {key: value for key, value in encoded_input.items()}    # If error, fix 'key: value.to(device) ...'
 
             with torch.no_grad():
-                model_output = llm_model(**encoded_input)
+                model_output = self.llm_model(**encoded_input)
 
             embedding = self.mean_pooling(model_output = model_output, attention_mask=encoded_input['attention_mask'])
             embedding = self.adjust_article_embedding_shape(embedding) # (max_paragraphs, embed_dim)
